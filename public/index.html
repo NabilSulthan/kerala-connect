@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>1st Sight</title>
+<title>Malabar Meetup</title>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
 <style>
 :root{--ink:#14262b;--panel:rgba(20,38,43,.9);--txt:#f7ecd2;--coral:#e0476c;--amber:#f2b134;--line:rgba(247,236,210,.25)}
@@ -29,6 +29,10 @@ button:disabled{opacity:.4;cursor:not-allowed}button:focus-visible,input:focus-v
 #knob{position:absolute;left:35px;top:35px;width:40px;height:40px;border-radius:50%;background:var(--amber)}
 @media (pointer:coarse){#joy{display:block}#help{display:none}}
 #toast{position:absolute;left:50%;top:22%;transform:translateX(-50%);font-size:22px;font-weight:800;opacity:0;transition:opacity .3s;pointer-events:none;text-shadow:0 2px 8px #000;text-align:center;width:90%}
+#chatbox{right:10px;bottom:14px;width:240px;display:none}
+#log{height:110px;overflow:auto;font-size:13px;line-height:1.4;margin-bottom:8px;word-break:break-word}
+#msg{width:100%;box-sizing:border-box;font:inherit;padding:8px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.08);color:var(--txt)}
+@media (max-width:900px){#chatbox{bottom:auto;top:64px}}
 </style>
 </head>
 <body>
@@ -38,7 +42,8 @@ button:disabled{opacity:.4;cursor:not-allowed}button:focus-visible,input:focus-v
 <div class="hud" id="joy"><div id="knob"></div></div>
 <div id="toast"></div>
 <div class="hud" id="dock"></div>
-<div class="hud" id="start"><h1>1st Sight</h1>
+<div class="hud" id="chatbox"><div id="log" aria-live="polite"></div><input id="msg" maxlength="200" placeholder="Say something to your date" aria-label="Chat message" autocomplete="off"></div>
+<div class="hud" id="start"><h1>Malabar Meetup</h1>
 <input id="nm" maxlength="16" placeholder="Your name" aria-label="Your name" autocomplete="off">
 <div id="locs"></div><p id="err"></p></div>
 
@@ -152,9 +157,13 @@ function bind(){
   socket.on('me',d=>{me=d});
   socket.on('invited',d=>{invite={from:d.from,name:d.name,t:Date.now()};toast(d.name+' invited you')});
   socket.on('toast',toast);
-  socket.on('gift',d=>{toast(d.by+' sent '+d.name);const a=av.get(me.partner)||av.get(myId);if(a)burst(a.g.position,0xe0476c,18,1)});
-  socket.on('date:end',d=>{toast(d.reason==='left'?'Your date left the game':'The date has ended');const a=av.get(myId);if(a)burst(a.g.position,0x8aa4ad,30,-1)});
+  socket.on('gift',d=>{toast(d.by+' sent '+d.name);giftFly(d)});
+  socket.on('date:end',d=>{endAct();$('log').textContent='';toast(d.reason==='left'?'Your date left the game':'The date has ended');const a=av.get(myId);if(a)burst(a.g.position,0x8aa4ad,30,-1)});
   socket.on('emote',d=>{const a=av.get(d.id);if(a)burst(a.g.position,0xe0476c,24,1)});
+  socket.on('activity:start',startAct);
+  socket.on('activity:end',d=>{endAct(d);toast(d.name+' finished')});
+  socket.on('chat',m=>{const l=$('log'),p=document.createElement('div');p.textContent=m.from+': '+m.text;l.appendChild(p);
+    while(l.children.length>30)l.firstChild.remove();l.scrollTop=l.scrollHeight});
 }
 function join(loc){
   if(typeof io==='undefined'){$('err').textContent='Server not found. Run "npm start" and open http://localhost:3000';return}
@@ -168,21 +177,24 @@ $('travel').addEventListener('click',()=>{$('start').style.display='block'});
 function render(){
   const d=$('dock'),p=me.partner&&av.get(me.partner),nm=p?p.name:'',inv=invite&&Date.now()-invite.t<15000?invite:null;
   const sentNow=sent>Date.now()-15000,nr=near&&av.get(near),gifts=cfg?cfg.gifts:[];
-  const k=[me.status,me.chem,Math.floor(me.coins),near,inv&&inv.from,sentNow,nm].join();
+  const k=[me.status,me.chem,Math.floor(me.coins),near,inv&&inv.from,sentNow,nm,!!act].join();
   if(k===key)return;key=k;
-  $('coins').textContent=Math.floor(me.coins);$('status').textContent=ST[me.status]+(nm?' with '+nm:'');
+  $('coins').textContent=Math.floor(me.coins);$('chatbox').style.display=me.partner?'block':'none';$('status').textContent=ST[me.status]+(nm?' with '+nm:'');
   let h='';
-  if(inv)h=`<h2>${esc(inv.name)} invited you on a date</h2><div class="row"><button data-a="accept">Accept</button><button class="alt" data-a="decline">Decline</button></div>`;
+  if(act)h=`<h2>${esc(act.name)}</h2><p>Just the two of you.</p>`;
+  else if(inv)h=`<h2>${esc(inv.name)} invited you on a date</h2><div class="row"><button data-a="accept">Accept</button><button class="alt" data-a="decline">Decline</button></div>`;
   else if(me.status==='strangers'){if(nr)h=`<h2>${esc(nr.name)} is nearby</h2><p>Invite them to a private date.</p><button data-a="invite" ${sentNow?'disabled':''}>${sentNow?'Invite sent':'Invite '+esc(nr.name)+' on a date'}</button>`}
   else{const couple=me.status==='couple';
     h=`<h2>${couple?'With':'On a date with'} ${esc(nm)}</h2><p>Chemistry ${me.chem}%</p><div class="bar"><div id="fill" style="width:${me.chem}%"></div></div><div class="row">`+
       (couple?`<button data-a="emote">Send hearts</button>`:gifts.map(g=>`<button data-a="gift" data-id="${g.id}" ${me.coins<g.cost?'disabled':''}>${g.name} · ${g.cost}</button>`).join('')+(me.chem>=100?'<button data-a="commit">Commit</button>':''))+
+      (cfg.acts||[]).map(a=>`<button class="alt" data-a="activity" data-id="${a.id}" ${me.coins<a.cost?'disabled':''}>${a.name} · ${a.cost}</button>`).join('')+
       `<button class="alt" data-a="end">${couple?'Break up':'End date'}</button></div>`}
   d.innerHTML=h;d.style.display=h?'block':'none'}
 $('dock').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;const a=b.dataset.a;
   if(a==='invite'){socket.emit('invite',{to:near});sent=Date.now();toast('Invite sent')}
   else if(a==='accept'||a==='decline'){socket.emit('respond',{accept:a==='accept'});invite=null}
   else if(a==='gift')socket.emit('gift',{id:b.dataset.id});
+  else if(a==='activity')socket.emit('activity',{id:b.dataset.id});
   else socket.emit(a);
   key=''});
 let tt;function toast(m){const t=$('toast');t.textContent=m;t.style.opacity=1;clearTimeout(tt);tt=setTimeout(()=>t.style.opacity=0,1800)}
@@ -201,6 +213,38 @@ jp.addEventListener('pointerdown',e=>{jp.setPointerCapture(e.pointerId);jm(e)});
 jp.addEventListener('pointermove',e=>{if(e.buttons||e.pointerType==='touch')jm(e)});
 ['pointerup','pointercancel'].forEach(t=>jp.addEventListener(t,()=>{joy.x=joy.y=0;kn.style.transform=''}));
 
+/* ---- Gift flight and shared activities ---- */
+const fly=[];let act=null;
+$('msg').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.value.trim()&&socket){socket.emit('chat',e.target.value);e.target.value=''}});
+function giftFly(d){   // the gift travels from the giver to the receiver
+  const a=av.get(d.byId),b=d.byId===myId?av.get(me.partner):av.get(myId);if(!a||!b)return;
+  const g=new THREE.Group();
+  if(/flower|lotus|orchid/.test(d.id)){put(new THREE.CylinderGeometry(.03,.03,.7,6),0x2f8f4e,0,0,0,g);put(new THREE.SphereGeometry(.2,10,8),0xe0476c,0,.4,0,g)}
+  else put(new THREE.BoxGeometry(.5,.3,.4),/halwa|tea|cardamom|dinner|spices/.test(d.id)?0x5a3319:0xf2b134,0,0,0,g);
+  scene.add(g);fly.push({g,a:a.g.position.clone().setY(1.2),b:b.g.position.clone().setY(1.2),t:0})}
+function startAct(d){
+  const g=new THREE.Group();g.position.set(d.ax,0,d.az);scene.add(g);
+  if(d.kind==='boat'){
+    put(new THREE.BoxGeometry(4.2,.7,1.8),0x3b2a1a,0,.35,0,g);put(new THREE.BoxGeometry(3.4,.25,2.2),0xc8a15a,0,3.2,0,g);
+    [-1.5,1.5].forEach(x=>put(new THREE.CylinderGeometry(.06,.06,2.8,6),0x6b4a2b,x,1.7,0,g));
+    const w=new THREE.Mesh(new THREE.CircleGeometry(3.2,24).rotateX(-Math.PI/2),new THREE.MeshBasicMaterial({color:0x9fd6ea,transparent:true,opacity:.4}));w.position.y=.03;g.add(w);
+  }else if(d.kind==='tea'){
+    put(new THREE.CylinderGeometry(.8,.8,.1,14),0x6b4a2b,0,.95,0,g);put(new THREE.CylinderGeometry(.1,.1,.95,6),0x6b4a2b,0,.47,0,g);
+    [-1.3,1.3].forEach(x=>{put(new THREE.CylinderGeometry(.35,.35,.5,10),0x8a6a3a,x,.25,0,g);put(new THREE.CylinderGeometry(.12,.1,.16,8),0xffffff,x*.25,1.08,0,g)});
+    put(new THREE.SphereGeometry(.2,10,8),0xd9a441,0,1.2,0,g)}
+  act={...d,grp:g,t0:performance.now(),last:0};key='';toast(d.name)}
+function actUpdate(now){   // both clients run the same path from the same start time, so partners see the same thing
+  const w=(now-act.t0)/2000,dx=Math.cos(w)*2.5,dz=-Math.sin(w)*1.5,L=Math.hypot(dx,dz)||1,hx=dx/L,hz=dz/L;
+  const bx=act.ax+Math.sin(w)*5,bz=act.az-3*(1-Math.cos(w));
+  if(act.kind==='boat'){act.grp.position.set(bx,0,bz);act.grp.rotation.y=Math.atan2(-hz,hx)}
+  act.ids.forEach((id,i)=>{const a=av.get(id);if(!a)return;const s=i?1:-1;let x,z,y=0,ry=Math.atan2(hx,hz);
+    if(act.kind==='boat'){x=bx+hx*s*.8;z=bz+hz*s*.8;y=.6}
+    else if(act.kind==='tea'){x=act.ax+s*1.3;z=act.az;y=-.3;ry=-s*Math.PI/2}
+    else{x=bx+hz*s*.7;z=bz-hx*s*.7}
+    a.g.position.set(x,y,z);a.g.rotation.y=ry;if(id===myId){pos.x=x;pos.z=z}});
+  if(now-act.last>1500){act.last=now;const a=av.get(act.ids[0]);if(a)burst(a.g.position,act.kind==='tea'?0xffffff:0xe0476c,act.kind==='tea'?3:6,1)}}
+function endAct(d){if(!act)return;scene.remove(act.grp);act.ids.forEach(id=>{const a=av.get(id);if(a)a.g.position.y=0});act=null;key='';if(d){pos.x=d.x;pos.z=d.z}}
+
 /* ---- Loop ---- */
 function resize(){const w=$('stage').clientWidth,h=$('stage').clientHeight;ren.setSize(w,h,false);cam.aspect=w/h;cam.updateProjectionMatrix()}
 addEventListener('resize',resize);resize();
@@ -209,15 +253,18 @@ function tick(){
   const dt=Math.min(clock.getDelta(),.05),mine=av.get(myId),t=performance.now();
   if(mine){
     const ix=joy.x+(keys.KeyD||keys.ArrowRight?1:0)-(keys.KeyA||keys.ArrowLeft?1:0),iz=joy.y+(keys.KeyS||keys.ArrowDown?1:0)-(keys.KeyW||keys.ArrowUp?1:0),l=Math.hypot(ix,iz);
-    if(l>.05){const sp=(keys.ShiftLeft?9:5)*dt/Math.max(1,l);pos.x=THREE.MathUtils.clamp(pos.x+ix*sp,-38,38);pos.z=THREE.MathUtils.clamp(pos.z+iz*sp,-18,38);rot.y=Math.atan2(ix,iz);mine.g.rotation.y=rot.y;
+    if(l>.05&&!act){const sp=(keys.ShiftLeft?9:5)*dt/Math.max(1,l);pos.x=THREE.MathUtils.clamp(pos.x+ix*sp,-38,38);pos.z=THREE.MathUtils.clamp(pos.z+iz*sp,-18,38);rot.y=Math.atan2(ix,iz);mine.g.rotation.y=rot.y;
       if(t-lastSend>66){socket.emit('move',{x:pos.x,z:pos.z,ry:rot.y});lastSend=t}}
     mine.g.position.set(pos.x,0,pos.z);
-    av.forEach((a,id)=>{if(id!==myId){const f=Math.min(1,dt*10);a.g.position.x+=(a.tx-a.g.position.x)*f;a.g.position.z+=(a.tz-a.g.position.z)*f}});
+    av.forEach((a,id)=>{if(id!==myId&&!(act&&act.ids.includes(id))){const f=Math.min(1,dt*10);a.g.position.x+=(a.tx-a.g.position.x)*f;a.g.position.z+=(a.tz-a.g.position.z)*f}});
+    if(act)actUpdate(t);
     near=null;if(me.status==='strangers'){let b=3;av.forEach((a,id)=>{if(id!==myId&&a.st==='strangers'){const d=Math.hypot(a.g.position.x-pos.x,a.g.position.z-pos.z);if(d<b){b=d;near=id}}})}
     if(ring)ring.visible=me.status==='couple';
     cam.position.lerp(new THREE.Vector3(pos.x,8,pos.z+11),.08);cam.lookAt(pos.x,1,pos.z);render();
   }
   for(let i=parts.length-1;i>=0;i--){const q=parts[i];q.life-=dt;q.v.y-=(q.up>0?4:2)*dt;q.m.position.addScaledVector(q.v,dt);q.m.material.opacity=Math.max(0,q.life);if(q.life<=0){scene.remove(q.m);parts.splice(i,1)}}
+  for(let i=fly.length-1;i>=0;i--){const f=fly[i];f.t+=dt/1.1;const k=Math.min(1,f.t);f.g.position.lerpVectors(f.a,f.b,k);f.g.position.y+=Math.sin(Math.PI*k)*1.2;f.g.rotation.y+=dt*4;
+    if(f.t>=1){burst(f.b,0xe0476c,16,1);scene.remove(f.g);fly.splice(i,1)}}
   ren.render(scene,cam);requestAnimationFrame(tick)}
 cam.position.set(0,8,25);cam.lookAt(0,1,14);tick();
 </script>

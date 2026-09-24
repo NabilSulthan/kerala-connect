@@ -1,4 +1,4 @@
-// 1st Sight server. Run: npm install && npm start  (then open http://localhost:3000)
+// Malabar Meetup server. Run: npm install && npm start  (then open http://localhost:3000)
 // The server is authoritative for positions, coins, invites, gifts and relationship state.
 const express = require('express'), http = require('http'), path = require('path');
 const { Server } = require('socket.io');
@@ -27,7 +27,7 @@ const LOCS = {
     { id: 'dinner', name: 'Cliffside sunset dinner', cost: 40, gain: 35 }] },
   alleppey: { name: 'Alleppey Backwaters', gifts: [
     { id: 'lotus', name: 'Lotus flower', cost: 20, gain: 25 },
-    { id: 'houseboat', name: 'Houseboat cruise', cost: 45, gain: 40 }] },
+    { id: 'boatmodel', name: 'Toy houseboat', cost: 45, gain: 40 }] },
   athirappilly: { name: 'Athirappilly Falls', gifts: [
     { id: 'orchid', name: 'Wild orchid', cost: 20, gain: 25 },
     { id: 'photo', name: 'Waterfall photo print', cost: 30, gain: 25 }] },
@@ -35,6 +35,15 @@ const LOCS = {
     { id: 'keychain', name: 'Fort keychain', cost: 20, gain: 25 },
     { id: 'scarf', name: 'Kasaragod silk scarf', cost: 40, gain: 35 }] }
 };
+// Shared date activities. kind decides the animation on the client: boat, tea or walk.
+const WALK = { id: 'walk', name: 'Sunset walk', kind: 'walk', cost: 15, gain: 20, secs: 10 };
+const ACTS = {
+  alleppey: [{ id: 'boat', name: 'Houseboat ride', kind: 'boat', cost: 45, gain: 40, secs: 14 }, WALK],
+  fortkochi: [{ id: 'boat', name: 'Ferry ride', kind: 'boat', cost: 30, gain: 30, secs: 12 }, WALK],
+  munnar: [{ id: 'tea', name: 'Tea at the stall', kind: 'tea', cost: 25, gain: 30, secs: 12 }, WALK],
+  varkala: [{ id: 'tea', name: 'Sunset chai', kind: 'tea', cost: 25, gain: 30, secs: 12 }, WALK]
+};
+const actsFor = l => ACTS[l] || [WALK];
 const COLORS = [0x2a9d8f, 0xe0476c, 0x6a4c93, 0xf2b134, 0x4a7fd1, 0xd1603d];
 const INVITE_TTL = 15000, INVITE_RANGE = 4;
 let colorIdx = 0;
@@ -49,9 +58,10 @@ const sendMe = p => io.to(p.id).emit('me', { coins: Math.floor(p.coins), status:
 
 function endDate(p, reason = 'ended') {
   const d = p.date; if (!d) return;
+  clearTimeout(d.timer);
   for (const id of [d.a, d.b]) {
     const q = players.get(id); if (!q) continue;
-    q.date = null; q.status = 'strangers'; q.partner = null;
+    q.date = null; q.busy = false; q.status = 'strangers'; q.partner = null;
     io.to(id).emit('date:end', { reason }); sendMe(q);
   }
 }
@@ -64,12 +74,12 @@ io.on('connection', s => {
     loc = LOCS[loc] ? loc : 'kozhikode';
     Object.assign(p, { name: String(name || '').replace(/[<>&"']/g, '').trim().slice(0, 16) || 'Guest', loc, x: Math.random() * 8 - 4, z: 14, ry: 0 });
     s.join(room(loc));
-    s.emit('init', { id: s.id, loc, cfg: LOCS[loc], players: inLoc(loc).map(pub) });
+    s.emit('init', { id: s.id, loc, cfg: { ...LOCS[loc], acts: actsFor(loc) }, players: inLoc(loc).map(pub) });
     sendMe(p);
   });
 
   s.on('move', ({ x, z, ry } = {}) => {
-    const p = players.get(s.id); if (!p) return;
+    const p = players.get(s.id); if (!p || p.busy) return;
     p.x = clamp(x, -38, 38); p.z = clamp(z, -18, 38); p.ry = Number(ry) || 0;
   });
 
@@ -98,7 +108,7 @@ io.on('connection', s => {
     const g = LOCS[p.loc].gifts.find(x => x.id === id);
     if (!g || p.coins < g.cost) return;
     p.coins -= g.cost; d.chem = Math.min(100, d.chem + g.gain);
-    for (const i of [d.a, d.b]) { io.to(i).emit('gift', { name: g.name, by: p.name }); sendMe(players.get(i)); }
+    for (const i of [d.a, d.b]) { io.to(i).emit('gift', { name: g.name, by: p.name, byId: p.id, id: g.id }); sendMe(players.get(i)); }
   });
 
   s.on('commit', () => {          // both players must press Commit
@@ -115,6 +125,28 @@ io.on('connection', s => {
     if (p && p.status === 'couple') io.to(room(p.loc)).emit('emote', { id: p.id });
   });
 
+  s.on('activity', ({ id } = {}) => {   // shared activity: both partners are locked in place while it plays
+    const p = players.get(s.id), d = p && p.date, q = p && players.get(p.partner);
+    if (!d || !q || d.busy) return;
+    const a = actsFor(p.loc).find(x => x.id === id);
+    if (!a || p.coins < a.cost) return;
+    p.coins -= a.cost; d.busy = true; p.busy = q.busy = true;
+    const ax = (p.x + q.x) / 2, az = (p.z + q.z) / 2;
+    for (const x of [p, q]) { io.to(x.id).emit('activity:start', { kind: a.kind, name: a.name, secs: a.secs, ax, az, ids: [p.id, q.id] }); sendMe(x); }
+    d.timer = setTimeout(() => {
+      d.busy = false; d.timer = null; p.busy = q.busy = false;
+      if (p.status === 'date') d.chem = Math.min(100, d.chem + a.gain);
+      p.x = clamp(ax - 1.2, -38, 38); q.x = clamp(ax + 1.2, -38, 38); p.z = q.z = clamp(az, -18, 38);
+      for (const x of [p, q]) { io.to(x.id).emit('activity:end', { x: x.x, z: x.z, name: a.name }); sendMe(x); }
+    }, a.secs * 1000);
+  });
+
+  s.on('chat', text => {   // private chat between date partners only
+    const p = players.get(s.id), q = p && players.get(p.partner);
+    const t = String(text || '').trim().slice(0, 200);
+    if (q && t) io.to(p.id).to(q.id).emit('chat', { from: p.name, text: t });
+  });
+
   s.on('end', () => { const p = players.get(s.id); if (p) endDate(p, 'ended'); });
 
   s.on('disconnect', () => {
@@ -127,4 +159,4 @@ io.on('connection', s => {
 setInterval(() => { for (const l in LOCS) io.to(room(l)).emit('state', inLoc(l).map(pub)); }, 100);
 setInterval(() => { for (const p of players.values()) if (p.coins < 200) { p.coins += 1; sendMe(p); } }, 2000);
 
-server.listen(process.env.PORT || 3000, () => console.log('1st Sight on http://localhost:' + (process.env.PORT || 3000)));
+server.listen(process.env.PORT || 3000, () => console.log('Malabar Meetup on http://localhost:' + (process.env.PORT || 3000)));
