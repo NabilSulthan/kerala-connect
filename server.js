@@ -1,4 +1,4 @@
-// Malabar Meetup server. Run: npm install && npm start  (then open http://localhost:3000)
+// Kerala-connect server. Run: npm install && npm start  (then open http://localhost:3000)
 // The server is authoritative for positions, coins, invites, gifts and relationship state.
 const express = require('express'), http = require('http'), path = require('path');
 const { Server } = require('socket.io');
@@ -168,4 +168,4 @@ io.on('connection', s => {
 setInterval(() => { for (const l in LOCS) io.to(room(l)).emit('state', inLoc(l).map(pub)); }, 100);
 setInterval(() => { for (const p of players.values()) if (p.coins < 200) { p.coins += 1; sendMe(p); } }, 2000);
 
-server.listen(process.env.PORT || 3000, () => console.log('Malabar Meetup on http://localhost:' + (process.env.PORT || 3000)));
+server.listen(process.env.PORT || 3000, () => console.log('Kerala-connect on http://localhost:' + (process.env.PORT || 3000)));
