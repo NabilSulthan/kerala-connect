@@ -1,4 +1,4 @@
-// Kerala-connect server. Run: npm install && npm start  (then open http://localhost:3000)
+// Malabar Meetup server. Run: npm install && npm start  (then open http://localhost:3000)
 // The server is authoritative for positions, coins, invites, gifts and relationship state.
 const express = require('express'), http = require('http'), path = require('path');
 const { Server } = require('socket.io');
@@ -35,15 +35,21 @@ const LOCS = {
     { id: 'keychain', name: 'Fort keychain', cost: 20, gain: 25 },
     { id: 'scarf', name: 'Kasaragod silk scarf', cost: 40, gain: 35 }] }
 };
-// Shared date activities. kind decides the animation on the client: boat, tea or walk.
+// Shared date activities. kind decides the animation on the client: boat, tea, swing, surf or walk.
 const WALK = { id: 'walk', name: 'Sunset walk', kind: 'walk', cost: 15, gain: 20, secs: 10 };
+const SURF = { id: 'surf', name: 'Surfing', kind: 'surf', cost: 30, gain: 30, secs: 12 };
 const ACTS = {
+  kozhikode: [SURF, { id: 'tea', name: 'Beach shack tea', kind: 'tea', cost: 20, gain: 20, secs: 10 }, WALK],
+  kovalam: [SURF, { id: 'boat', name: 'Fishing boat ride', kind: 'boat', cost: 35, gain: 35, secs: 12 }, WALK],
+  varkala: [SURF, { id: 'tea', name: 'Sunset chai', kind: 'tea', cost: 25, gain: 30, secs: 12 }, WALK],
   alleppey: [{ id: 'boat', name: 'Houseboat ride', kind: 'boat', cost: 45, gain: 40, secs: 14 }, WALK],
-  fortkochi: [{ id: 'boat', name: 'Ferry ride', kind: 'boat', cost: 30, gain: 30, secs: 12 }, WALK],
-  munnar: [{ id: 'tea', name: 'Tea at the stall', kind: 'tea', cost: 25, gain: 30, secs: 12 }, WALK],
-  varkala: [{ id: 'tea', name: 'Sunset chai', kind: 'tea', cost: 25, gain: 30, secs: 12 }, WALK]
+  fortkochi: [{ id: 'boat', name: 'Ferry ride', kind: 'boat', cost: 30, gain: 30, secs: 12 }, { id: 'tea', name: 'Tea restaurant', kind: 'tea', cost: 25, gain: 25, secs: 10 }, WALK],
+  munnar: [{ id: 'tea', name: 'Tea at the stall', kind: 'tea', cost: 25, gain: 30, secs: 12 }, { id: 'swing', name: 'Garden swing', kind: 'swing', cost: 20, gain: 25, secs: 10 }, WALK],
+  athirappilly: [{ id: 'swing', name: 'Rope swing', kind: 'swing', cost: 20, gain: 25, secs: 10 }, WALK],
+  bekal: [{ id: 'tea', name: 'Fort-view restaurant', kind: 'tea', cost: 25, gain: 25, secs: 10 }, WALK]
 };
 const actsFor = l => ACTS[l] || [WALK];
+const STYLES = { m: ['tee', 'shirt', 'kurta'], f: ['top', 'dress', 'saree'] };
 const COLORS = [0x2a9d8f, 0xe0476c, 0x6a4c93, 0xf2b134, 0x4a7fd1, 0xd1603d];
 const INVITE_TTL = 15000, INVITE_RANGE = 4;
 let colorIdx = 0;
@@ -53,7 +59,7 @@ const invites = new Map();   // target id -> { from, t }
 const clamp = (v, a, b) => Math.min(b, Math.max(a, Number(v) || 0));
 const room = l => 'loc:' + l;
 const inLoc = l => [...players.values()].filter(q => q.loc === l);
-const pub = p => ({ id: p.id, name: p.name, color: p.color, x: p.x, z: p.z, ry: p.ry, status: p.status, partner: p.partner });
+const pub = p => ({ id: p.id, name: p.name, color: p.color, gender: p.gender, style: p.style, x: p.x, z: p.z, ry: p.ry, status: p.status, partner: p.partner });
 const sendMe = p => io.to(p.id).emit('me', { coins: Math.floor(p.coins), status: p.status, partner: p.partner, chem: p.date ? p.date.chem : 0 });
 
 function endDate(p, reason = 'ended') {
@@ -67,12 +73,15 @@ function endDate(p, reason = 'ended') {
 }
 
 io.on('connection', s => {
-  s.on('join', ({ name, loc } = {}) => {
+  s.on('join', ({ name, loc, gender, style, color } = {}) => {
+    const nm = String(name || '').replace(/[<>&"']/g, '').trim().slice(0, 16);
+    if (!nm) return;   // a name is required
+    const g = gender === 'f' ? 'f' : 'm';
     let p = players.get(s.id);
     if (p) { endDate(p); s.leave(room(p.loc)); }
     else { p = { id: s.id, coins: 100, color: COLORS[colorIdx++ % COLORS.length], status: 'strangers', partner: null, date: null }; players.set(s.id, p); }
     loc = LOCS[loc] ? loc : 'kozhikode';
-    Object.assign(p, { name: String(name || '').replace(/[<>&"']/g, '').trim().slice(0, 16) || 'Guest', loc, x: Math.random() * 8 - 4, z: 14, ry: 0 });
+    Object.assign(p, { name: nm, gender: g, style: STYLES[g].includes(style) ? style : STYLES[g][0], color: COLORS.includes(color) ? color : p.color, loc, x: Math.random() * 8 - 4, z: 14, ry: 0 });
     s.join(room(loc));
     s.emit('init', { id: s.id, loc, cfg: { ...LOCS[loc], acts: actsFor(loc) }, players: inLoc(loc).map(pub) });
     sendMe(p);
@@ -159,4 +168,4 @@ io.on('connection', s => {
 setInterval(() => { for (const l in LOCS) io.to(room(l)).emit('state', inLoc(l).map(pub)); }, 100);
 setInterval(() => { for (const p of players.values()) if (p.coins < 200) { p.coins += 1; sendMe(p); } }, 2000);
 
-server.listen(process.env.PORT || 3000, () => console.log('Kerala-connect on http://localhost:' + (process.env.PORT || 3000)));
+server.listen(process.env.PORT || 3000, () => console.log('Malabar Meetup on http://localhost:' + (process.env.PORT || 3000)));
